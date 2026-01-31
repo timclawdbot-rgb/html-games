@@ -1,0 +1,37 @@
+{
+  "date": "2026-01-31",
+  "lowestPriceGBP": 288.94,
+  "lowestAsin": "B0C14QXKJW",
+  "items": [
+    {
+      "asin": "B0DGH3HBHJ",
+      "title": "Samsung 990 EVO Plus 4TB NVMe M.2 (MZ-V9S4T0BW)",
+      "priceGBP": 340.86,
+      "type": "NVMe M.2"
+    },
+    {
+      "asin": "B0F3WLFCPL",
+      "title": "Crucial P310 4TB NVMe M.2 (CT4000P310SSD801)",
+      "priceGBP": 349.99,
+      "type": "NVMe M.2"
+    },
+    {
+      "asin": "B0CBYZ6DD1",
+      "title": "Samsung 990 PRO 4TB NVMe M.2 (MZ-V9P4T0BW)",
+      "priceGBP": 375.99,
+      "type": "NVMe M.2"
+    },
+    {
+      "asin": "B0C14QXKJW",
+      "title": "WD Blue SA510 SSD 4TB 2.5\" SATA",
+      "priceGBP": 288.94,
+      "type": "SATA 2.5\""
+    },
+    {
+      "asin": "B0CY37V52M",
+      "title": "Crucial BX500 4TB 2.5\" SATA (CT4000BX500SSD101)",
+      "priceGBP": 299.99,
+      "type": "SATA 2.5\""
+    }
+  ]
+}
