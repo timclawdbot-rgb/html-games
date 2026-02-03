@@ -67,6 +67,12 @@ def local_day(ts: int) -> str:
     return datetime.fromtimestamp(ts).date().isoformat()
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, col: str, decl: str):
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if col not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def init_db(db_path: str) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -98,6 +104,14 @@ def init_db(db_path: str) -> sqlite3.Connection:
         );
         """
     )
+
+    # Lightweight migrations / extra fields
+    _ensure_column(conn, "price_checks", "buybox_price_raw", "TEXT")
+    _ensure_column(conn, "price_checks", "buybox_price_gbp", "REAL")
+    _ensure_column(conn, "price_checks", "lowest_new_price_raw", "TEXT")
+    _ensure_column(conn, "price_checks", "lowest_new_price_gbp", "REAL")
+    _ensure_column(conn, "price_checks", "price_source", "TEXT")
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_checks_day_asin ON price_checks(day, asin);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_checks_run ON price_checks(run_id);")
     conn.commit()
@@ -122,13 +136,25 @@ def store_check(
     url: str | None,
     price_raw: str | None,
     price_gbp: float | None,
+    buybox_price_raw: str | None,
+    buybox_price_gbp: float | None,
+    lowest_new_price_raw: str | None,
+    lowest_new_price_gbp: float | None,
+    price_source: str | None,
     ok: bool,
     error: str | None,
 ):
     conn.execute(
         """
-        INSERT INTO price_checks(run_id,ts,day,asin,label,title,url,price_raw,price_gbp,ok,error)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO price_checks(
+          run_id,ts,day,asin,label,title,url,
+          price_raw,price_gbp,
+          buybox_price_raw,buybox_price_gbp,
+          lowest_new_price_raw,lowest_new_price_gbp,
+          price_source,
+          ok,error
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             run_id,
@@ -140,6 +166,11 @@ def store_check(
             url,
             price_raw,
             price_gbp,
+            buybox_price_raw,
+            buybox_price_gbp,
+            lowest_new_price_raw,
+            lowest_new_price_gbp,
+            price_source,
             1 if ok else 0,
             error,
         ),
@@ -159,6 +190,11 @@ def openclaw_browser_open(url: str) -> str:
     return tid
 
 
+def openclaw_browser_navigate(target_id: str, url: str):
+    # Navigate within an existing tab
+    run_cmd(["openclaw", "browser", "navigate", "--target-id", target_id, url], timeout=90)
+
+
 def openclaw_browser_close(target_id: str):
     try:
         run_cmd(["openclaw", "browser", "close", target_id], timeout=30)
@@ -166,16 +202,100 @@ def openclaw_browser_close(target_id: str):
         pass
 
 
-def openclaw_browser_eval(target_id: str) -> dict[str, Any]:
-    # Extract title + buy-box price (best-effort)
-    fn = r'''() => ({
-      title: (document.getElementById("productTitle")?.innerText||"").trim(),
-      price: document.querySelector("#corePriceDisplay_desktop_feature_div .a-price .a-offscreen")?.innerText
+def openclaw_browser_eval_product(target_id: str) -> dict[str, Any]:
+    # Extract title + buy-box price + best-effort offers link (best-effort)
+    fn = r'''() => {
+      const buyboxPrice = document.querySelector("#corePriceDisplay_desktop_feature_div .a-price .a-offscreen")?.innerText
         || document.querySelector("#corePriceDisplay_desktop_feature_div .a-offscreen")?.innerText
         || document.querySelector(".a-price .a-offscreen")?.innerText
-        || null,
-      url: location.href
-    })'''
+        || null;
+
+      // Link to offers / buying options (varies a lot). Try a few patterns.
+      const offersHref = (
+        document.querySelector('#buybox-see-all-buying-choices a')?.href
+        || document.querySelector("a[href*='/gp/offer-listing/']")?.href
+        || document.querySelector("a[href*='offer-listing']")?.href
+        || null
+      );
+
+      return {
+        title: (document.getElementById("productTitle")?.innerText||"").trim(),
+        buyboxPrice,
+        offersUrl: offersHref,
+        url: location.href
+      };
+    }'''
+
+    out = run_cmd(
+        [
+            "openclaw",
+            "browser",
+            "evaluate",
+            "--json",
+            "--expect-final",
+            "--timeout",
+            "60000",
+            "--target-id",
+            target_id,
+            "--fn",
+            fn,
+        ],
+        timeout=90,
+    )
+    obj = json.loads(out)
+    return obj.get("result") or {}
+
+
+def openclaw_browser_eval_lowest_new_offer(target_id: str) -> dict[str, Any]:
+    # On the All Offers Display (AOD) view, pick the lowest "New" offer currently loaded.
+    fn = r'''() => {
+      const offers = [...document.querySelectorAll('#aod-offer-list #aod-offer')];
+      function priceToNum(s){
+        if(!s) return null;
+        const m = (s.replace(/,/g,'').match(/([0-9]+(?:\.[0-9]{2})?)/));
+        return m ? parseFloat(m[1]) : null;
+      }
+      let best = null;
+      let bestNum = null;
+      let newCount = 0;
+      for(const offer of offers){
+        const txt = (offer.innerText||'').trim();
+        const first = (txt.split(/\n/)[0]||'').trim();
+        if(!/^New$/i.test(first)) continue;
+        newCount++;
+        const priceText = offer.querySelector('span[id^="aod-price-"]')?.innerText || null;
+        const n = priceToNum(priceText);
+        if(n == null) continue;
+        if(bestNum == null || n < bestNum){
+          bestNum = n;
+          best = priceText;
+        }
+      }
+      return {loadedOfferCount: offers.length, newOfferCount: newCount, lowestNewPrice: best};
+    }'''
+
+    out = run_cmd(
+        [
+            "openclaw",
+            "browser",
+            "evaluate",
+            "--json",
+            "--expect-final",
+            "--timeout",
+            "60000",
+            "--target-id",
+            target_id,
+            "--fn",
+            fn,
+        ],
+        timeout=90,
+    )
+    obj = json.loads(out)
+    return obj.get("result") or {}
+
+
+def openclaw_browser_scroll_more(target_id: str, px: int = 1800) -> dict[str, Any]:
+    fn = f"() => {{ const before = window.scrollY; window.scrollBy(0, {px}); const after = window.scrollY; const atEnd = (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 5); return {{before, after, atEnd, scrollHeight: document.body.scrollHeight}}; }}"
     out = run_cmd(
         [
             "openclaw",
@@ -265,6 +385,7 @@ def main():
     ap.add_argument("--min-delay", type=float, default=2.0)
     ap.add_argument("--max-delay", type=float, default=6.0)
     ap.add_argument("--history-days", type=int, default=5, help="Days of history to include per item")
+    ap.add_argument("--dry-run", action="store_true", help="Do not send a message; print it instead")
     args = ap.parse_args()
 
     watch_name, items = load_watchlist(args.watchlist)
@@ -287,13 +408,67 @@ def main():
         try:
             target_id = openclaw_browser_open(f"https://www.amazon.co.uk/dp/{item.asin}")
             rand_sleep(args.min_delay, args.max_delay)
-            data = openclaw_browser_eval(target_id)
+            data = openclaw_browser_eval_product(target_id)
             rand_sleep(args.min_delay, args.max_delay)
 
             title = (data.get("title") or "").strip()
-            price_raw = data.get("price")
             url = data.get("url")
-            price_gbp = parse_price_gbp(price_raw)
+
+            buybox_raw = data.get("buyboxPrice")
+            buybox_gbp = parse_price_gbp(buybox_raw)
+
+            lowest_new_raw = None
+            lowest_new_gbp = None
+
+            offers_url = data.get("offersUrl")
+            if offers_url:
+                try:
+                    # Force NEW-only if possible
+                    if "condition=ALL" in offers_url:
+                        offers_url = offers_url.replace("condition=ALL", "condition=NEW")
+                    elif "condition=" not in offers_url:
+                        offers_url += ("&" if "?" in offers_url else "?") + "condition=NEW"
+
+                    # Load offers (AOD) in the same tab
+                    openclaw_browser_navigate(target_id, offers_url)
+                    rand_sleep(args.min_delay, args.max_delay)
+
+                    # AOD often lazy-loads; sample a few scroll positions and keep the lowest NEW found
+                    best_raw = None
+                    best_gbp = None
+                    for _ in range(4):
+                        od = openclaw_browser_eval_lowest_new_offer(target_id)
+                        cand_raw = od.get("lowestNewPrice")
+                        cand_gbp = parse_price_gbp(cand_raw)
+                        if cand_gbp is not None and (best_gbp is None or cand_gbp < best_gbp):
+                            best_gbp = cand_gbp
+                            best_raw = cand_raw
+
+                        sc = openclaw_browser_scroll_more(target_id)
+                        rand_sleep(args.min_delay, args.max_delay)
+                        if sc.get("atEnd"):
+                            break
+
+                    lowest_new_raw = best_raw
+                    lowest_new_gbp = best_gbp
+                except Exception:
+                    # best-effort: ignore and fall back to buybox
+                    lowest_new_raw = None
+                    lowest_new_gbp = None
+
+            # Choose the price we track as primary
+            if lowest_new_gbp is not None:
+                price_raw = lowest_new_raw
+                price_gbp = lowest_new_gbp
+                price_source = "lowest_new_offer"
+            elif buybox_gbp is not None:
+                price_raw = buybox_raw
+                price_gbp = buybox_gbp
+                price_source = "buybox"
+            else:
+                price_raw = None
+                price_gbp = None
+                price_source = "none"
 
             ok = bool(title)
             store_check(
@@ -306,6 +481,11 @@ def main():
                 url=url,
                 price_raw=price_raw,
                 price_gbp=price_gbp,
+                buybox_price_raw=buybox_raw,
+                buybox_price_gbp=buybox_gbp,
+                lowest_new_price_raw=lowest_new_raw,
+                lowest_new_price_gbp=lowest_new_gbp,
+                price_source=price_source,
                 ok=ok,
                 error=None if ok else "missing-title",
             )
@@ -318,8 +498,11 @@ def main():
                     "title": title or item.label,
                     "price_gbp": price_gbp,
                     "price_raw": price_raw,
+                    "price_source": price_source,
                     "url": url or f"https://www.amazon.co.uk/dp/{item.asin}",
                     "ccc": f"https://uk.camelcamelcamel.com/product/{item.asin}",
+                    "buybox_gbp": buybox_gbp,
+                    "lowest_new_gbp": lowest_new_gbp,
                 }
             )
         except Exception as e:
@@ -333,6 +516,11 @@ def main():
                 url=f"https://www.amazon.co.uk/dp/{item.asin}",
                 price_raw=None,
                 price_gbp=None,
+                buybox_price_raw=None,
+                buybox_price_gbp=None,
+                lowest_new_price_raw=None,
+                lowest_new_price_gbp=None,
+                price_source="error",
                 ok=False,
                 error=str(e)[:300],
             )
@@ -344,6 +532,7 @@ def main():
                     "title": item.label,
                     "price_gbp": None,
                     "price_raw": None,
+                    "price_source": "error",
                     "url": f"https://www.amazon.co.uk/dp/{item.asin}",
                     "ccc": f"https://uk.camelcamelcamel.com/product/{item.asin}",
                     "error": str(e)[:140],
@@ -365,7 +554,7 @@ def main():
     lines.append(f"{watch_name} — {today}")
 
     if best:
-        lines.append(f"Best right now: {best['label']} — {fmt_money(best['price_gbp'])}")
+        lines.append(f"Best right now (lowest NEW offer): {best['label']} — {fmt_money(best['price_gbp'])}")
         lines.append(best["url"])
         lines.append(best["ccc"])
     else:
@@ -392,7 +581,10 @@ def main():
     lines.append(f"DB: {args.db}")
 
     msg = "\n".join(lines).strip()
-    send_message(args.channel, args.target, msg)
+    if args.dry_run:
+        print(msg)
+    else:
+        send_message(args.channel, args.target, msg)
 
 
 if __name__ == "__main__":
