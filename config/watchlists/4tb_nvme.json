@@ -4,6 +4,9 @@
   "items": [
     {"asin": "B0DGH3HBHJ", "label": "Samsung 990 EVO Plus 4TB"},
     {"asin": "B0F3WLFCPL", "label": "Crucial P310 4TB"},
-    {"asin": "B0CBYZ6DD1", "label": "Samsung 990 PRO 4TB"}
+    {"asin": "B0F3WKYQPS", "label": "Crucial (Heatsink) 4TB"},
+    {"asin": "B0CBYZ6DD1", "label": "Samsung 990 PRO 4TB"},
+    {"asin": "B0B7CQ2CHH", "label": "WD_BLACK SN850X 4TB"},
+    {"asin": "B0D7MLB76V", "label": "WD Blue 4TB"}
   ]
 }
