@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Combat (Atari‑style)</title>
+  <style>
+    :root { --bg:#000; --fg:#0f0; --fg2:#ff0; --muted:#9aa0a6; }
+    body{ margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,Segoe UI,Roboto,Arial; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+    .wrap{ text-align:center; }
+    canvas{ border:1px solid #222; background:#000; image-rendering: pixelated; }
+    .hud{ margin-top:10px; color:var(--muted); font-size:14px; }
+    .hud b{ color:var(--fg); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="c" width="640" height="360"></canvas>
+    <div class="hud">
+      <div><b>COMBAT (Atari‑style)</b> — 2‑player tank duel</div>
+      <div>P1: WASD + Space • P2: Arrows + Enter • First to 21 wins • (sound requires a keypress)</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  const W = canvas.width, H = canvas.height;
+  const keys = Object.create(null);
+  addEventListener('keydown', e => keys[e.key] = true);
+  addEventListener('keyup',   e => keys[e.key] = false);
+
+  // Simple pixel-ish look
+  function rect(x,y,w,h,col){ ctx.fillStyle = col; ctx.fillRect(x|0,y|0,w|0,h|0); }
+  function text(s,x,y,col='#9aa0a6'){ ctx.fillStyle=col; ctx.font='16px monospace'; ctx.fillText(s,x,y); }
+
+  const walls = [
+    {x: 200, y: 60,  w: 12, h: 240},
+    {x: 428, y: 60,  w: 12, h: 240},
+    {x: 260, y: 170, w: 120, h: 12},
+  ];
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max,v)); }
+
+  function newTank(x,y,angle,col){
+    return { x, y, angle, col, vx:0, vy:0, cooldown:0, score:0 };
+  }
+
+  const p1 = newTank(100, H/2, 0, '#00ff66');
+  const p2 = newTank(W-100, H/2, Math.PI, '#ffcc00');
+
+  let bullets = [];
+  const MAX_SCORE = 21;
+
+  // --- Sound (simple WebAudio beeps; no external assets) ---
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      audioCtx = AC ? new AC() : null;
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+  }
+  addEventListener('pointerdown', ensureAudio, { passive: true });
+  addEventListener('keydown', ensureAudio);
+
+  function beep({freq=440, dur=0.06, type='square', gain=0.06, decay=0.04} = {}) {
+    if (!audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t0);
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.max(0.01, dur));
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start(t0);
+    o.stop(t0 + dur + decay);
+  }
+
+  const sfx = {
+    shoot: () => beep({freq: 740, dur: 0.05, type:'square', gain:0.05}),
+    bounce: () => beep({freq: 520, dur: 0.03, type:'triangle', gain:0.04}),
+    hit: () => { beep({freq: 180, dur: 0.09, type:'sawtooth', gain:0.07}); setTimeout(()=>beep({freq:120, dur:0.08, type:'sawtooth', gain:0.06}), 40); }
+  };
+
+  let roundState = 'play'; // play | hit
+  let hitTimer = 0;
+  let hitTankRef = null;
+  const HIT_SPIN_SPEED = 1.2; // radians per frame
+  const HIT_SPIN_FRAMES = 18;
+
+  function resetRound() {
+    p1.x = 100; p1.y = H/2; p1.angle = 0; p1.vx = 0; p1.vy = 0; p1.cooldown = 0;
+    p2.x = W-100; p2.y = H/2; p2.angle = Math.PI; p2.vx = 0; p2.vy = 0; p2.cooldown = 0;
+    bullets = [];
+    roundState = 'play';
+    hitTimer = 0;
+    hitTankRef = null;
+  }
+
+  function resetMatch(){ p1.score=0; p2.score=0; resetRound(); }
+
+  function aabb(ax,ay,aw,ah, bx,by,bw,bh){
+    return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+  }
+
+  function collideWalls(x,y,size){
+    for (const w of walls) {
+      if (aabb(x-size, y-size, size*2, size*2, w.x, w.y, w.w, w.h)) return true;
+    }
+    return false;
+  }
+
+  function shoot(tank) {
+    if (tank.cooldown > 0) return;
+    tank.cooldown = 22;
+    const speed = 7;
+    bullets.push({
+      x: tank.x + Math.cos(tank.angle)*14,
+      y: tank.y + Math.sin(tank.angle)*14,
+      vx: Math.cos(tank.angle)*speed,
+      vy: Math.sin(tank.angle)*speed,
+      owner: tank,
+      life: 180,
+      bounceCd: 0,
+    });
+    sfx.shoot();
+  }
+
+  function updateTank(tank, controls) {
+    // Slow tanks down a lot (more like classic Combat)
+    const turn = 0.045;
+    const thrust = 0.12;
+    const friction = 0.93;
+    const size = 10;
+
+    if (keys[controls.left])  tank.angle -= turn;
+    if (keys[controls.right]) tank.angle += turn;
+
+    if (keys[controls.up]) {
+      tank.vx += Math.cos(tank.angle) * thrust;
+      tank.vy += Math.sin(tank.angle) * thrust;
+    }
+    if (keys[controls.down]) {
+      tank.vx -= Math.cos(tank.angle) * thrust * 0.45;
+      tank.vy -= Math.sin(tank.angle) * thrust * 0.45;
+    }
+
+    // try move X then Y with simple wall blocking
+    let nx = tank.x + tank.vx;
+    let ny = tank.y;
+    if (!collideWalls(nx, ny, size)) tank.x = nx; else tank.vx *= -0.3;
+
+    nx = tank.x;
+    ny = tank.y + tank.vy;
+    if (!collideWalls(nx, ny, size)) tank.y = ny; else tank.vy *= -0.3;
+
+    tank.x = clamp(tank.x, 20, W-20);
+    tank.y = clamp(tank.y, 20, H-20);
+
+    tank.vx *= friction;
+    tank.vy *= friction;
+
+    if (keys[controls.fire]) shoot(tank);
+    if (tank.cooldown > 0) tank.cooldown--;
+  }
+
+  function startHitAnimation(victim) {
+    roundState = 'hit';
+    hitTimer = HIT_SPIN_FRAMES;
+    hitTankRef = victim;
+    bullets = [];
+    sfx.hit();
+  }
+
+  function updateBullets() {
+    const size = 3;
+    for (const b of bullets) {
+      b.x += b.vx;
+      b.y += b.vy;
+      b.life--;
+      if (b.bounceCd > 0) b.bounceCd--;
+
+      let bounced = false;
+
+      // bounce on walls
+      for (const w of walls) {
+        if (aabb(b.x-size, b.y-size, size*2, size*2, w.x, w.y, w.w, w.h)) {
+          // crude bounce: flip whichever axis is deeper
+          const cx = clamp(b.x, w.x, w.x+w.w);
+          const cy = clamp(b.y, w.y, w.y+w.h);
+          const dx = b.x - cx;
+          const dy = b.y - cy;
+          if (Math.abs(dx) > Math.abs(dy)) b.vx *= -1; else b.vy *= -1;
+          b.x += b.vx; b.y += b.vy;
+          bounced = true;
+        }
+      }
+
+      // bounds
+      if (b.x < 0 || b.x > W) { b.vx *= -1; bounced = true; }
+      if (b.y < 0 || b.y > H) { b.vy *= -1; bounced = true; }
+
+      if (bounced && b.bounceCd === 0) {
+        sfx.bounce();
+        b.bounceCd = 6;
+      }
+    }
+    bullets = bullets.filter(b => b.life > 0);
+
+    // hit detection
+    const hitSize = 10;
+    function hitTank(b, t) {
+      return aabb(b.x-3, b.y-3, 6, 6, t.x-hitSize, t.y-hitSize, hitSize*2, hitSize*2);
+    }
+
+    for (const b of bullets) {
+      if (b.owner !== p1 && hitTank(b, p1)) {
+        p2.score++;
+        startHitAnimation(p1);
+        return;
+      }
+      if (b.owner !== p2 && hitTank(b, p2)) {
+        p1.score++;
+        startHitAnimation(p2);
+        return;
+      }
+    }
+  }
+
+  function drawTank(t) {
+    // body
+    rect(t.x-10, t.y-8, 20, 16, t.col);
+    // turret
+    const tx = t.x + Math.cos(t.angle)*14;
+    const ty = t.y + Math.sin(t.angle)*14;
+    ctx.strokeStyle = t.col;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(t.x, t.y);
+    ctx.lineTo(tx, ty);
+    ctx.stroke();
+  }
+
+  function render() {
+    rect(0,0,W,H,'#000');
+
+    // walls
+    for (const w of walls) rect(w.x,w.y,w.w,w.h,'#222');
+
+    // bullets
+    for (const b of bullets) rect(b.x-2,b.y-2,4,4,'#fff');
+
+    drawTank(p1);
+    drawTank(p2);
+
+    text(`P1 ${p1.score}`, 20, 24, '#00ff66');
+    text(`P2 ${p2.score}`, W-80, 24, '#ffcc00');
+
+    if (p1.score >= MAX_SCORE || p2.score >= MAX_SCORE) {
+      const winner = p1.score >= MAX_SCORE ? 'P1 WINS!' : 'P2 WINS!';
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff';
+      ctx.font = '36px monospace';
+      ctx.fillText(winner, W/2 - 110, H/2);
+      ctx.font = '16px monospace';
+      ctx.fillText('Press R to restart', W/2 - 90, H/2 + 40);
+    }
+  }
+
+  function tick() {
+    if (keys['r'] || keys['R']) resetMatch();
+
+    if (p1.score < MAX_SCORE && p2.score < MAX_SCORE) {
+      if (roundState === 'play') {
+        updateTank(p1, {left:'a', right:'d', up:'w', down:'s', fire:' '});
+        updateTank(p2, {left:'ArrowLeft', right:'ArrowRight', up:'ArrowUp', down:'ArrowDown', fire:'Enter'});
+        updateBullets();
+      } else if (roundState === 'hit') {
+        // spin the hit tank quickly, then reset round
+        if (hitTankRef) hitTankRef.angle += HIT_SPIN_SPEED;
+        hitTimer--;
+        if (hitTimer <= 0) resetRound();
+      }
+    }
+
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  resetMatch();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
