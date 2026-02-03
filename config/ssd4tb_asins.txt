@@ -1,5 +1,0 @@
-# One ASIN per line. Lines starting with # are ignored.
-# 4TB NVMe shortlist (edit as you like)
-B0DGH3HBHJ  # Samsung 990 EVO Plus 4TB
-B0F3WLFCPL  # Crucial P310 4TB
-B0CBYZ6DD1  # Samsung 990 PRO 4TB
