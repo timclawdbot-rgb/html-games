@@ -84,14 +84,25 @@
   const sfx = {
     shoot: () => beep({freq: 740, dur: 0.05, type:'square', gain:0.05}),
     bounce: () => beep({freq: 520, dur: 0.03, type:'triangle', gain:0.04}),
-    hit: () => { beep({freq: 180, dur: 0.09, type:'sawtooth', gain:0.07}); setTimeout(()=>beep({freq:120, dur:0.08, type:'sawtooth', gain:0.06}), 40); }
+    // "big" hit noise
+    hit: () => {
+      beep({freq: 160, dur: 0.18, type:'sawtooth', gain:0.10});
+      setTimeout(()=>beep({freq: 90, dur: 0.22, type:'sawtooth', gain:0.10}), 60);
+      setTimeout(()=>beep({freq: 60, dur: 0.28, type:'square', gain:0.08}), 120);
+      setTimeout(()=>beep({freq: 220, dur: 0.10, type:'triangle', gain:0.06}), 180);
+    }
   };
 
   let roundState = 'play'; // play | hit
   let hitTimer = 0;
   let hitTankRef = null;
-  const HIT_SPIN_SPEED = 1.2; // radians per frame
-  const HIT_SPIN_FRAMES = 18;
+  let hitKnockTimer = 0;
+  let hitKnockVX = 0;
+  let hitKnockVY = 0;
+  const HIT_SPIN_SPEED = 0.75; // radians per frame (fast spin)
+  const HIT_SPIN_FRAMES = 60 * 8; // ~8 seconds at 60fps
+  const HIT_KNOCK_FRAMES = 18;
+  const HIT_KNOCK_DIST = 42; // pixels ("a few metres" arcade-ish)
 
   function resetRound() {
     p1.x = 100; p1.y = H/2; p1.angle = 0; p1.vx = 0; p1.vy = 0; p1.cooldown = 0;
@@ -100,6 +111,9 @@
     roundState = 'play';
     hitTimer = 0;
     hitTankRef = null;
+    hitKnockTimer = 0;
+    hitKnockVX = 0;
+    hitKnockVY = 0;
   }
 
   function resetMatch(){ p1.score=0; p2.score=0; resetRound(); }
@@ -169,11 +183,21 @@
     if (tank.cooldown > 0) tank.cooldown--;
   }
 
-  function startHitAnimation(victim) {
+  function startHitAnimation(victim, bullet) {
     roundState = 'hit';
     hitTimer = HIT_SPIN_FRAMES;
     hitTankRef = victim;
     bullets = [];
+
+    // Knockback ("jump") away from bullet travel direction
+    let bx = bullet?.vx ?? 0;
+    let by = bullet?.vy ?? 0;
+    const mag = Math.hypot(bx, by) || 1;
+    bx /= mag; by /= mag;
+    hitKnockVX = -bx;
+    hitKnockVY = -by;
+    hitKnockTimer = HIT_KNOCK_FRAMES;
+
     sfx.hit();
   }
 
@@ -221,12 +245,12 @@
     for (const b of bullets) {
       if (b.owner !== p1 && hitTank(b, p1)) {
         p2.score++;
-        startHitAnimation(p1);
+        startHitAnimation(p1, b);
         return;
       }
       if (b.owner !== p2 && hitTank(b, p2)) {
         p1.score++;
-        startHitAnimation(p2);
+        startHitAnimation(p2, b);
         return;
       }
     }
@@ -282,8 +306,23 @@
         updateTank(p2, {left:'ArrowLeft', right:'ArrowRight', up:'ArrowUp', down:'ArrowDown', fire:'Enter'});
         updateBullets();
       } else if (roundState === 'hit') {
-        // spin the hit tank quickly, then reset round
-        if (hitTankRef) hitTankRef.angle += HIT_SPIN_SPEED;
+        // Knockback "jump" first, then keep spinning until reset.
+        if (hitTankRef) {
+          // apply knockback over a short window with easing
+          if (hitKnockTimer > 0) {
+            const t = hitKnockTimer / HIT_KNOCK_FRAMES; // 1..0
+            const step = (HIT_KNOCK_DIST / HIT_KNOCK_FRAMES) * (0.6 + 0.4 * t);
+            const nx = hitTankRef.x + hitKnockVX * step;
+            const ny = hitTankRef.y + hitKnockVY * step;
+            // Keep inside arena; ignore wall collision for simplicity (arcade feel)
+            hitTankRef.x = clamp(nx, 20, W-20);
+            hitTankRef.y = clamp(ny, 20, H-20);
+            hitKnockTimer--;
+          }
+
+          // fast spin
+          hitTankRef.angle += HIT_SPIN_SPEED;
+        }
         hitTimer--;
         if (hitTimer <= 0) resetRound();
       }
