@@ -1,0 +1,9 @@
+{
+  "name": "4TB NVMe SSDs",
+  "currency": "GBP",
+  "items": [
+    {"asin": "B0DGH3HBHJ", "label": "Samsung 990 EVO Plus 4TB"},
+    {"asin": "B0F3WLFCPL", "label": "Crucial P310 4TB"},
+    {"asin": "B0CBYZ6DD1", "label": "Samsung 990 PRO 4TB"}
+  ]
+}
