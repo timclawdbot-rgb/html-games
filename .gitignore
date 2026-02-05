@@ -1,0 +1,20 @@
+# Virtualenvs
+.venv/
+.venv-*/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Local outputs
+out/
+logs/
+*.log
+
+# Scratch/temp
+tmp*
+*.tmp
+
+# OS
+.DS_Store

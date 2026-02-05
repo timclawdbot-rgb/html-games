@@ -12,6 +12,7 @@ compaction or restarts. Keep it short and curated.
 
 ## Preferences
 - Keep a running workspace file at /home/tnu/clawd/ideas.txt for business/project ideas; add new ideas there when Tim asks.
+- Default TTS voice for Telegram voice notes: UK female (Edge TTS voice: en-GB-SoniaNeural).
 
 ## Ongoing Projects
 - 
