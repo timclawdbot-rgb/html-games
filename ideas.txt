@@ -1,0 +1,11 @@
+# ideas.txt
+
+## Amazon affiliate deal alerts for creators (storage niche)
+- Target: UK creators / content creators (overlap with motorbike YouTube audience)
+- Niche: high-demand tech items, especially storage: SSDs (NVMe/SATA), RAM, SD cards, enclosures
+- Value prop: low-frequency email list (“only when it’s actually a good price”) with Amazon referral links
+- Key needs:
+  - durable price data source (avoid fragile scraping if possible; consider PA-API/Keepa/CamelCamelCamel)
+  - landing page + email signup + welcome sequence
+  - distribution via YouTube: description (top), pinned comment, verbal CTA
+
