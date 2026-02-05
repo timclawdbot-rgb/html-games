@@ -9,3 +9,12 @@
   - landing page + email signup + welcome sequence
   - distribution via YouTube: description (top), pinned comment, verbal CTA
 
+## Product price finder / comparison helper
+- Problem: find a product online and quickly see if it’s cheaper elsewhere (Google, price comparison sites, image search)
+- User flow (MVP): paste a product URL (or title) → get a shortlist of alternative retailers + best-effort prices + links
+- Constraints:
+  - avoid paid APIs; prefer free sources / low-frequency crawling
+  - matching is tricky (variants/bundles); include confidence notes
+- Possible sources (UK): PriceRunner, PriceSpy, Idealo, Google Shopping (may be brittle), Amazon/eBay search pages
+- Output: “best total price including shipping” if possible; otherwise just price + link + retailer
+
