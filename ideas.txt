@@ -18,3 +18,14 @@
 - Possible sources (UK): PriceRunner, PriceSpy, Idealo, Google Shopping (may be brittle), Amazon/eBay search pages
 - Output: “best total price including shipping” if possible; otherwise just price + link + retailer
 
+## Pivot 7sweb.com from "websites" to "automation & systems" for local businesses
+- Observation: brochure websites are commoditised (Squarespace/Wix/WordPress), but businesses still pay for outcomes: saved time, fewer mistakes, more leads.
+- Angle/credibility: Tim automated ~2 weeks of testing done by 8 people at a payroll company (click-through + compare vs expected results).
+- Productised offers (repeatable packages):
+  - Lead capture + instant follow-up + CRM/Sheet + reminders
+  - Booking + calendar + reminders + intake form (reduce no-shows)
+  - Invoicing + payment chasing + weekly summaries
+- Site changes:
+  - Headline: "Automations for local businesses — save 5–20 hours/week" (websites as add-on)
+  - CTA: "Free 20-min automation audit" + simple fixed-price packages + monthly support
+
